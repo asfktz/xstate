@@ -575,6 +575,8 @@ export type TransitionConfigFunction<
   TGuardMap extends Implementations['guards'],
   TDelayMap extends Implementations['delays'],
   TMeta extends MetaObject,
+  // `undefined` by default: only the `onTimeout` site threads a real input.
+  TInput = undefined,
   _TCtx extends MachineContext = [TContext] extends [never] ? any : TContext
 > = (
   args: TransitionFunctionArgs<
@@ -585,7 +587,7 @@ export type TransitionConfigFunction<
     TActorMap,
     TGuardMap,
     TDelayMap
-  >,
+  > & { input: TInput },
   enq: EnqueueObject<TEvent, TEmitted>
 ) => {
   target?: string | string[];
@@ -2540,6 +2542,8 @@ export type StateSchema = {
   exit?: unknown;
   onDone?: unknown;
   onError?: unknown;
+  timeout?: unknown;
+  onTimeout?: unknown;
   after?: unknown;
   always?: unknown;
   choice?: unknown;

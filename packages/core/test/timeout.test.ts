@@ -1,4 +1,5 @@
-import { createActor, createMachine } from '../src';
+import z from 'zod';
+import { createActor, createMachine, setup } from '../src';
 import { createAsyncLogic, TimeoutError } from '../src/actors/promise.ts';
 
 afterEach(() => {
@@ -219,6 +220,161 @@ describe('state-level timeout', () => {
         }
       })
     ).toThrow(/onTimeout/);
+  });
+
+  it('passes state input to timeout and onTimeout', () => {
+    vi.useFakeTimers();
+
+    const timeoutSpy = vi.fn();
+    const onTimeoutSpy = vi.fn();
+    const machine = setup({
+      schemas: {
+        events: {
+          activate: z.object({
+            duration: z.number()
+          })
+        }
+      },
+      states: {
+        idle: {},
+        active: {
+          schemas: {
+            input: z.object({
+              duration: z.number()
+            })
+          }
+        }
+      }
+    }).createMachine({
+      initial: 'idle',
+      states: {
+        idle: {
+          on: {
+            activate: ({ event }) => ({
+              target: 'active',
+              input: {
+                duration: event.duration
+              }
+            })
+          }
+        },
+        active: {
+          timeout: ({ input }) => {
+            timeoutSpy(input.duration);
+
+            return input.duration;
+          },
+          onTimeout: ({ input }, enq) => {
+            enq(onTimeoutSpy, input.duration);
+
+            return {
+              target: 'idle'
+            };
+          }
+        }
+      }
+    });
+
+    const actor = createActor(machine).start();
+
+    actor.send({ type: 'activate', duration: 500 });
+
+    expect(actor.getSnapshot().value).toBe('active');
+    // timeout resolves eagerly on entry; onTimeout waits for the delay
+    expect(timeoutSpy).toHaveBeenCalledWith(500);
+    expect(onTimeoutSpy).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(500);
+    expect(actor.getSnapshot().value).toBe('idle');
+    expect(onTimeoutSpy).toHaveBeenCalledWith(500);
+  });
+
+  it('passes state input to a nested child timeout and onTimeout', () => {
+    vi.useFakeTimers();
+
+    const timeoutSpy = vi.fn();
+    const onTimeoutSpy = vi.fn();
+    const parentTimeoutSpy = vi.fn();
+    const parentOnTimeoutSpy = vi.fn();
+
+    const machine = setup({
+      states: {
+        parent: {
+          schemas: {
+            input: z.object({
+              duration: z.number()
+            })
+          },
+          states: {
+            child: {
+              schemas: {
+                input: z.object({
+                  duration: z.number()
+                })
+              }
+            },
+            done: {}
+          }
+        },
+        timedOut: {}
+      }
+    }).createMachine({
+      initial: {
+        target: 'parent',
+        input: { duration: 1000 }
+      },
+      states: {
+        parent: {
+          initial: {
+            target: 'child',
+            input: { duration: 500 }
+          },
+          timeout: ({ input }) => {
+            parentTimeoutSpy(input.duration);
+
+            return input.duration;
+          },
+          onTimeout: ({ input }, enq) => {
+            enq(parentOnTimeoutSpy, input.duration);
+
+            return { target: 'timedOut' };
+          },
+          states: {
+            child: {
+              timeout: ({ input }) => {
+                timeoutSpy(input.duration);
+
+                return input.duration;
+              },
+              onTimeout: ({ input }, enq) => {
+                enq(onTimeoutSpy, input.duration);
+
+                return { target: 'done' };
+              }
+            },
+            done: {}
+          }
+        },
+        timedOut: {}
+      }
+    });
+
+    const actor = createActor(machine).start();
+
+    // parent and child are active at once; each timeout resolves eagerly with
+    // its own input (child 500, parent 1000)
+    expect(timeoutSpy).toHaveBeenCalledWith(500);
+    expect(parentTimeoutSpy).toHaveBeenCalledWith(1000);
+    expect(actor.getSnapshot().value).toEqual({ parent: 'child' });
+
+    vi.advanceTimersByTime(500);
+    expect(actor.getSnapshot().value).toEqual({ parent: 'done' });
+    expect(onTimeoutSpy).toHaveBeenCalledWith(500);
+    expect(parentOnTimeoutSpy).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(500);
+    expect(actor.getSnapshot().value).toBe('timedOut');
+    expect(parentOnTimeoutSpy).toHaveBeenCalledWith(1000);
   });
 });
 
