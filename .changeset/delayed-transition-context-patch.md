@@ -7,27 +7,47 @@ Delayed transitions (`onTimeout` and `after`) and error transitions (`onError`) 
 ```ts
 const machine = setup({
   schemas: {
-    context: z.object({ reason: z.union([z.literal('timeout'), z.null()]) })
+    context: z.object({
+      error: z.union([z.string(), z.null()]),
+      reason: z.union([z.literal('timeout'), z.null()])
+    })
   },
   states: {
-    running: { schemas: { context: z.object({ reason: z.null() }) } },
+    active: {
+      schemas: {
+        context: z.object({ error: z.null(), reason: z.null() })
+      }
+    },
     expired: {
-      schemas: { context: z.object({ reason: z.literal('timeout') }) }
+      schemas: {
+        context: z.object({ error: z.null(), reason: z.literal('timeout') })
+      }
+    },
+    failed: {
+      schemas: {
+        context: z.object({ error: z.string(), reason: z.null() })
+      }
     }
   }
 }).createMachine({
-  context: { reason: null },
-  initial: 'running',
+  context: { error: null, reason: null },
+  initial: 'active',
   states: {
-    running: {
+    active: {
       timeout: 5000,
       // Previously a type error; now checked against `expired`'s context
       onTimeout: () => ({
         target: 'expired',
         context: { reason: 'timeout' as const }
+      }),
+      // Previously a type error; now checked against `failed`'s context
+      onError: ({ event }) => ({
+        target: 'failed',
+        context: { error: event.error.message }
       })
     },
-    expired: { type: 'final' }
+    expired: { type: 'final' },
+    failed: { type: 'final' }
   }
 });
 ```
